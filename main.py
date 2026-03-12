@@ -9,7 +9,6 @@ app = Flask(__name__)
 DOWNLOAD_DIR = "/tmp/downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Auto delete files after 10 min
 def auto_delete(path, delay=600):
     def delete():
         time.sleep(delay)
@@ -25,11 +24,11 @@ def index():
 
 @app.route("/info", methods=["POST"])
 def get_info():
-    data = request.json
-    url = data.get("url", "").strip()
-    if not url:
-        return jsonify({"error": "URL required"}), 400
     try:
+        data = request.get_json(force=True, silent=True) or {}
+        url = data.get("url", "").strip()
+        if not url:
+            return jsonify({"error": "URL required"}), 400
         ydl_opts = {"quiet": True, "no_warnings": True}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -46,7 +45,7 @@ def get_info():
                         "ext": ext,
                         "filesize": f.get("filesize") or 0
                     })
-            formats.sort(key=lambda x: int(x["quality"].replace("p","")), reverse=True)
+            formats.sort(key=lambda x: int(x["quality"].replace("p", "")), reverse=True)
             return jsonify({
                 "title": info.get("title", "Video"),
                 "thumbnail": info.get("thumbnail", ""),
@@ -59,12 +58,12 @@ def get_info():
 
 @app.route("/download", methods=["POST"])
 def download():
-    data = request.json
-    url = data.get("url", "").strip()
-    format_id = data.get("format_id", "best")
-    if not url:
-        return jsonify({"error": "URL required"}), 400
     try:
+        data = request.get_json(force=True, silent=True) or {}
+        url = data.get("url", "").strip()
+        format_id = data.get("format_id", "best")
+        if not url:
+            return jsonify({"error": "URL required"}), 400
         filename = str(uuid.uuid4())
         output_path = os.path.join(DOWNLOAD_DIR, filename)
         ydl_opts = {
@@ -76,7 +75,6 @@ def download():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             title = info.get("title", "video")
-        # Find downloaded file
         for f in os.listdir(DOWNLOAD_DIR):
             if f.startswith(filename):
                 full_path = os.path.join(DOWNLOAD_DIR, f)

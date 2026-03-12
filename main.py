@@ -9,12 +9,40 @@ app = Flask(__name__)
 DOWNLOAD_DIR = "/tmp/downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+jobs = {}  # job_id: status
+
 def auto_delete(path, delay=600):
     def delete():
         time.sleep(delay)
         if os.path.exists(path):
             os.remove(path)
     threading.Thread(target=delete, daemon=True).start()
+
+def do_download(job_id, url, format_id):
+    try:
+        filename = job_id
+        output_path = os.path.join(DOWNLOAD_DIR, filename)
+        ydl_opts = {
+            "format": f"{format_id}+bestaudio/best" if format_id != "best" else "best[ext=mp4]/best",
+            "outtmpl": output_path + ".%(ext)s",
+            "quiet": True,
+            "merge_output_format": "mp4",
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            title = info.get("title", "video")
+
+        for f in os.listdir(DOWNLOAD_DIR):
+            if f.startswith(filename):
+                full_path = os.path.join(DOWNLOAD_DIR, f)
+                auto_delete(full_path)
+                safe_title = "".join(c for c in title if c.isalnum() or c in " -_")[:50]
+                jobs[job_id] = {"status": "done", "file": full_path, "title": safe_title}
+                return
+
+        jobs[job_id] = {"status": "error", "message": "File not found"}
+    except Exception as e:
+        jobs[job_id] = {"status": "error", "message": str(e)}
 
 HTML = open("index.html", encoding="utf-8").read()
 
@@ -64,30 +92,27 @@ def download():
         format_id = data.get("format_id", "best")
         if not url:
             return jsonify({"error": "URL required"}), 400
-        filename = str(uuid.uuid4())
-        output_path = os.path.join(DOWNLOAD_DIR, filename)
-        ydl_opts = {
-            "format": f"{format_id}+bestaudio/best" if format_id != "best" else "best[ext=mp4]/best",
-            "outtmpl": output_path + ".%(ext)s",
-            "quiet": True,
-            "merge_output_format": "mp4",
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            title = info.get("title", "video")
-        for f in os.listdir(DOWNLOAD_DIR):
-            if f.startswith(filename):
-                full_path = os.path.join(DOWNLOAD_DIR, f)
-                auto_delete(full_path)
-                safe_title = "".join(c for c in title if c.isalnum() or c in " -_")[:50]
-                return send_file(
-                    full_path,
-                    as_attachment=True,
-                    download_name=f"{safe_title}.mp4"
-                )
-        return jsonify({"error": "Download failed"}), 500
+
+        job_id = str(uuid.uuid4())
+        jobs[job_id] = {"status": "processing"}
+        threading.Thread(target=do_download, args=(job_id, url, format_id), daemon=True).start()
+        return jsonify({"job_id": job_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/status/<job_id>")
+def status(job_id):
+    job = jobs.get(job_id)
+    if not job:
+        return jsonify({"status": "not_found"}), 404
+    return jsonify(job)
+
+@app.route("/file/<job_id>")
+def get_file(job_id):
+    job = jobs.get(job_id)
+    if not job or job.get("status") != "done":
+        return jsonify({"error": "Not ready"}), 404
+    return send_file(job["file"], as_attachment=True, download_name=job["title"] + ".mp4")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

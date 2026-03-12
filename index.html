@@ -180,37 +180,52 @@
   }
 
   async function startDownload(formatId) {
-    showStatus('⏳ Downloading... Please wait!', 'loading');
+    showStatus('⏳ Starting download... Please wait!', 'loading');
     document.getElementById('bestBtn').disabled = true;
 
     try {
+      // Step 1: Start the job
       const res = await fetch('/download', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({url: currentUrl, format_id: formatId})
       });
+      const data = await res.json();
+      if (data.error) { showStatus('❌ ' + data.error, 'error'); return; }
 
-      if (!res.ok) {
-        const err = await res.json();
-        showStatus('❌ ' + (err.error || 'Download failed'), 'error');
-        return;
-      }
+      const jobId = data.job_id;
+      let dots = 0;
 
-      const blob = await res.blob();
-      const disposition = res.headers.get('Content-Disposition') || '';
-      const match = disposition.match(/filename="(.+)"/);
-      const filename = match ? match[1] : 'video.mp4';
+      // Step 2: Poll status every 3 seconds
+      const interval = setInterval(async () => {
+        dots = (dots + 1) % 4;
+        showStatus('⏳ Downloading' + '.'.repeat(dots + 1) + ' Please wait!', 'loading');
+        try {
+          const s = await fetch('/status/' + jobId);
+          const sdata = await s.json();
 
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(a.href);
+          if (sdata.status === 'done') {
+            clearInterval(interval);
+            showStatus('✅ Ready! Saving file...', 'success');
+            // Step 3: Download the file
+            const a = document.createElement('a');
+            a.href = '/file/' + jobId;
+            a.download = (sdata.title || 'video') + '.mp4';
+            a.click();
+            showStatus('✅ Download started! Check your downloads folder.', 'success');
+            document.getElementById('bestBtn').disabled = false;
+          } else if (sdata.status === 'error') {
+            clearInterval(interval);
+            showStatus('❌ ' + (sdata.message || 'Download failed'), 'error');
+            document.getElementById('bestBtn').disabled = false;
+          }
+        } catch(e) {
+          // keep polling
+        }
+      }, 3000);
 
-      showStatus('✅ Download started! Check your downloads folder.', 'success');
     } catch(e) {
       showStatus('❌ Error: ' + e.message, 'error');
-    } finally {
       document.getElementById('bestBtn').disabled = false;
     }
   }
